@@ -1,42 +1,94 @@
+const path = require('path');
+
 const express = require('express');
-require('dotenv').config();
-const morgan = require('morgan')
-const dbConnection = require('./config/db');
-const CategoryRoute = require('./Routes/CategoryRoute');
-const http_status = require('./utils/http_status');
-const AppError = require('./utils/AppError');
-const GlobalError = require('./middlewares/ErrorMiddleware');
+const dotenv = require('dotenv');
+const morgan = require('morgan');
+const cors = require('cors');
+const compression = require('compression');
+const rateLimit = require('express-rate-limit');
+const hpp = require('hpp');
 
-const app = express();
+dotenv.config({ path: 'config.env' });
+const ApiError = require('./utils/apiError');
+const globalError = require('./middlewares/errorMiddleware');
+const dbConnection = require('./config/database');
+// Routes
+const mountRoutes = require('./routes');
+const { webhookCheckout } = require('./services/orderService');
 
-// Middlewares
-app.use(express.json());
-
-
-// Connect to the database
+// Connect with db
 dbConnection();
 
+// express app
+const app = express();
+
+// Enable other domains to access your application
+app.use(cors());
+app.options('*', cors());
+
+// compress all responses
+app.use(compression());
+
+// Checkout webhook
+app.post(
+  '/webhook-checkout',
+  express.raw({ type: 'application/json' }),
+  webhookCheckout
+);
+
+// Middlewares
+app.use(express.json({ limit: '20kb' }));
+app.use(express.static(path.join(__dirname, 'uploads')));
+
 if (process.env.NODE_ENV === 'development') {
-    app.use(morgan('dev')); 
-    console.log('Morgan enabled');
+  app.use(morgan('dev'));
+  console.log(`mode: ${process.env.NODE_ENV}`);
 }
 
-// Routes
-app.use('/api/category', CategoryRoute);
-
-
-// Route not found Middleware
-app.all('*', (req, res, next) => {
-    return next(new AppError(`Can't find ${req.originalUrl} on this server`, 404, http_status.ERROR));
+// Limit each IP to 100 requests per `window` (here, per 15 minutes)
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100,
+  message:
+    'Too many accounts created from this IP, please try again after an hour',
 });
 
-// Global Error handler Middleware
-app.use(GlobalError);
+// Apply the rate limiting middleware to all requests
+app.use('/api', limiter);
 
+// Middleware to protect against HTTP Parameter Pollution attacks
+app.use(
+  hpp({
+    whitelist: [
+      'price',
+      'sold',
+      'quantity',
+      'ratingsAverage',
+      'ratingsQuantity',
+    ],
+  })
+);
 
+// Mount Routes
+mountRoutes(app);
 
-// Start the server
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-    console.log(`Server is running on port: ${PORT}`);
-});   
+app.all('*', (req, res, next) => {
+  next(new ApiError(`Can't find this route: ${req.originalUrl}`, 400));
+});
+
+// Global error handling middleware for express
+app.use(globalError);
+
+const PORT = process.env.PORT || 8000;
+const server = app.listen(PORT, () => {
+  console.log(`App running running on port ${PORT}`);
+});
+
+// Handle rejection outside express
+process.on('unhandledRejection', (err) => {
+  console.error(`UnhandledRejection Errors: ${err.name} | ${err.message}`);
+  server.close(() => {
+    console.error(`Shutting down....`);
+    process.exit(1);
+  });
+});
