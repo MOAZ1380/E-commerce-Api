@@ -1,5 +1,3 @@
-(Due to technical issues, the search service is temporarily unavailable.)
-
 # 🛍️ E-Commerce RESTful API
 
 A robust and scalable backend solution for modern e-commerce platforms, built with Node.js, Express, and MongoDB. This API powers essential e-commerce operations including product management, order processing, payments, and user authentication.
